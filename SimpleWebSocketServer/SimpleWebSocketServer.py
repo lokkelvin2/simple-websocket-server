@@ -617,7 +617,13 @@ class SimpleWebSocketServer(object):
       if host is None:
          # bind on both IPv4 and IPv6 localhost 
          # if we don't explicitly set this, the behaviour isn't guranteed on some platforms. e.g. Windows
-         self.serversocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+         try:
+             self.serversocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+         except (AttributeError, socket.error):
+             pass
+           # Apparently, the socket option is not available in
+           # this machine's TCP stack
+         
 
       self.serversocket.bind(hostInfo[0][4])
       self.serversocket.listen(5)
@@ -715,6 +721,40 @@ class SimpleWebSocketServer(object):
    def serveforever(self):
       while True:
          self.serveonce()
+         
+   def sendonce(self,data_to_send):
+       writers = []
+       for fileno in self.listeners:
+          if fileno == self.serversocket:
+             continue
+          client = self.connections[fileno]
+          client.sendMessage(data_to_send)   
+          print(len( client.sendq))
+          if client.sendq:
+             writers.append(fileno)
+
+       rList, wList, xList = select(self.listeners, writers, self.listeners, self.selectInterval)
+      
+       for ready in wList:
+          client = self.connections[ready]
+          print(len( client.sendq))
+          try:
+             while client.sendq:
+                opcode, payload = client.sendq.popleft()
+                remaining = client._sendBuffer(payload)
+                if remaining is not None:
+                    client.sendq.appendleft((opcode, remaining))
+                    break
+                else:
+                    if opcode == CLOSE:
+                       raise Exception('received client close')
+
+          except Exception as n:
+             self._handleClose(client)
+             del self.connections[ready]
+             self.listeners.remove(ready)   
+         
+          
 
 class SimpleSSLWebSocketServer(SimpleWebSocketServer):
 
